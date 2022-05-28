@@ -1,0 +1,441 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+import shutil
+from selenium import webdriver
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+import time
+import os.path
+import os
+import openpyxl
+from selenium.webdriver.chrome.options import Options
+from google.cloud import storage
+import hvac
+import logging
+from datetime import date,timedelta,datetime
+
+## Import common utils
+from platform_vars import *
+from common_utils import storage_client_init
+
+#storage client
+bucket, storage_base_path = storage_client_init()
+print(storage_base_path)
+
+
+full_start_time = datetime.now()
+
+
+CHROMEDRIVER_PATH = '/usr/local/bin/chromedriver'
+WINDOW_SIZE = "1920,1080"
+
+# Initialize & Extract Vault Secrets
+client = hvac.Client()
+
+# The following path corresponds, when combined with the mount point, to a full Vault API route of "v1/secretz/hvac"
+mount_point = 'kv-bh'
+secret_path = 'password'
+
+read_secret_result = client.secrets.kv.v1.read_secret(
+    path=secret_path,
+    mount_point=mount_point,
+)
+
+automtn_usr = read_secret_result['data']['automation_user']
+automtn_pass = read_secret_result['data']['automation_pass']
+print(automtn_usr+' '+automtn_pass)
+
+
+#reshresh_mode can have 2 values 'Monthly_refresh' & 'Weekly_refresh'
+refresh_mode = 'Monthly_refresh'
+
+# Modify base path for current month
+base_month = '_'+str((date.today().replace(day=1) - timedelta(days=1)).strftime('%h'))+str(datetime.now().strftime('%Y'))
+curr_week = str(datetime.now().isocalendar()[1] - datetime.now().replace(day=1).isocalendar()[1] + 1)
+storage_base_path = 'raw_data'+base_month
+    
+    
+#Download Input List temporarily from GCS
+blobs = bucket.list_blobs()
+for blob in blobs:
+    if blob.name == 'input_list/IP_Config.xlsx':
+        blob.download_to_filename(f'{local_temp_dir}raw_input/IP_Config.xlsx')
+        time.sleep(5)
+        print('file downloaded !')
+
+## # Read Input Lists excel & extract all filenames & DB names
+list_excel = openpyxl.load_workbook(f'{local_temp_dir}raw_input/IP_Config.xlsx', data_only=True)
+base_path_for_downld = f'{local_temp_dir}raw_input/'
+
+#Remove temp Input List from raw location
+os.remove(f"{local_temp_dir}raw_input/IP_Config.xlsx")
+print("Input File Removed!")
+
+pref_list = list_excel.sheetnames
+
+all_ip = {}
+# Read Excel & Iterate over sheets
+for i in pref_list:
+    k=list_excel[i]
+    # Read each line in Sheet
+    for j in k:
+        
+        Monthly_load_var = j[5].value.lower() if j[5].value is not None else ''
+        Weekly_load_var = j[7].value.lower() if j[7].value is not None else ''
+        
+        
+        if refresh_mode == 'Monthly_refresh' and Monthly_load_var.lower() == 'y':
+            all_ip[j[0].value.replace('.xlsx','')] = j[2].value,storage_base_path+'/'+j[6].value
+        if refresh_mode == 'Weekly_refresh' and Monthly_load_var.lower() == 'y' and Weekly_load_var.lower() == 'y' :
+            all_ip[j[0].value.replace('.xlsx','')] = j[2].value,storage_base_path+'/'+j[6].value+'/'+j[8].value+curr_week
+        
+       
+
+        
+# Remove Header
+#del all_ip['FileName']        
+print("Excel part done")
+
+
+# Initialize starting time
+now1 = datetime.now()
+logging_file_time = now1.strftime("%d%m%Y%H%M%S")
+
+
+
+## # Create Logger
+# create logger
+# create logger with 'debug_application'
+logger = logging.getLogger('debug_application')
+logger.setLevel(logging.DEBUG)
+# create file handler which logs even debug messages
+fh = logging.FileHandler(f'{local_temp_dir}download_automation_logs/debug_ingestion_script_{}.log'.format(logging_file_time))
+fh.setLevel(logging.DEBUG)
+
+# create console handler with a higher log level
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+
+# create formatter and add it to the handlers
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+ch.setFormatter(formatter)
+
+# add the handlers to the logger
+logger.addHandler(fh)
+logger.addHandler(ch)
+
+# logger.debug(a)
+
+
+all_ip
+
+#To Filter out weekly Files
+all_ip_tmp =all_ip.copy()
+all_ip={}
+for i in all_ip_tmp.keys():
+    if 'Weekly' in i:
+        all_ip[i] = all_ip_tmp[i]
+
+
+
+sub=0
+all_ip_tmp =all_ip.copy()
+all_ip={}
+for k in all_ip_tmp.keys():
+    if sub <=50:
+        all_ip[k] =all_ip_tmp[k]
+        sub=sub+1
+    else:
+        break
+        
+all_ip
+
+## # Start Main loop
+      
+#Initialize Driver
+options = Options()
+options.add_argument("--headless")
+options.add_argument("--window-size=%s" % WINDOW_SIZE)
+options.add_argument('--no-sandbox')
+
+# Setting prefs & paths
+prefs = {"download.default_directory" : base_path_for_downld}
+    
+options.add_experimental_option("prefs",prefs)
+driver = webdriver.Chrome(executable_path=CHROMEDRIVER_PATH,options=options)
+logger.debug("Driver initialised")
+
+username = automtn_usr
+password = automtn_pass
+
+driver.get("https://connected.******.com/adhoclanding")
+WebDriverWait(driver,900).until(EC.presence_of_element_located((By.XPATH, '/html/body/div/div/div[3]/div/div/form/div[1]/div/input')))
+search_id=driver.find_element_by_xpath('/html/body/div/div/div[3]/div/div/form/div[1]/div/input')
+search_id.click()
+search_id.send_keys(username)
+search_id=driver.find_element_by_xpath('/html/body/div/div/div[3]/div/div/form/div[3]/div/input')
+search_id.click()
+search_id.send_keys(password)
+search_id=driver.find_element_by_xpath('/html/body/div/div/div[3]/div/div/form/div[4]/button').click()
+logger.debug("Login Done")
+print("Login Done")
+
+
+#Shadow Root 
+def expand_shadow_element(element):
+  shadow_root = driver.execute_script('return arguments[0].shadowRoot', element)
+  return shadow_root
+
+all_ip_cp=all_ip.copy()
+skip_iter=0
+FileNotFound_ls=[]
+
+while(True):
+    skipped_cnt=0
+    if all_ip:
+        logger.debug("Starting Reports loop")
+        
+        
+        # For each report in dict
+        for i in all_ip_cp:
+            print('starting with fresh new file...')
+            try:
+                filenotfound_flag=0
+                start_time = datetime.now()
+                
+                # Check if file is UPC, Monthly, Weekly or Others by FileName
+                folder= all_ip_cp[i][1]+'/'
+                logger.debug("folder set to: {}".format(folder))
+                
+                #path_name = storage_base_path+'/'+all_ip_cp[i][1]+'/'
+                #folder = all_ip_cp[i][1]
+                
+                logger.debug(":   finding {} file in DB dropdown: {}".format(i,all_ip_cp[i][0]))
+                print(":   finding {} file in DB dropdown: {}".format(i,all_ip_cp[i][0]))
+                
+                
+                WebDriverWait(driver,900).until(EC.presence_of_element_located((By.XPATH, '/html/body/app-root/div/nd-brand-bar/div/app-adhoc/div/div[1]/div/nd-dropdown-menu'))) 
+                time.sleep(5)
+                
+                
+                shadow_root1 = expand_shadow_element(driver.find_element_by_xpath('/html/body/app-root/div/nd-brand-bar/div/app-adhoc/div/div[1]/div/nd-dropdown-menu'))
+                drop_down = shadow_root1.find_element_by_css_selector('#menuButton > div > nd-input > nd-icon:nth-child(2)')
+                drop_down.click()
+                time.sleep(5)
+    
+                #logger.debug("CHECKING dropdown")
+                for x in range(1,9):
+                    db = driver.find_element_by_xpath('/html/body/app-root/div/nd-brand-bar/div/app-adhoc/div/div[1]/div/nd-dropdown-menu/nd-listbox/nd-item['+ str(x) + ']')
+                    if(all_ip_cp[i][0]==db.text):
+                        time.sleep(10)
+                        db.click()
+                        break
+                logger.debug("Accessed DB Dropdown")
+    
+                #Selecting Report
+                time.sleep(7)
+                shadow_root1 = expand_shadow_element(driver.find_element_by_xpath('/html/body/app-root/div/nd-brand-bar'))
+                shadow_root2 = expand_shadow_element(shadow_root1.find_element_by_css_selector('#searchInput'))
+                shadow_root3 = expand_shadow_element(shadow_root2.find_element_by_css_selector('#ndInput')) 
+                time.sleep(5)
+
+                
+                sdom1 = shadow_root3.find_element_by_css_selector('#nativeInput')
+                sdom1.send_keys(i)
+                
+                shadow_root4 = expand_shadow_element(shadow_root2.find_element_by_css_selector('#icon-container > nd-icon-button:nth-child(4)'))
+                sdom4 = shadow_root4.find_element_by_css_selector('#icon')
+                
+                sdom4.click()
+                time.sleep(3)
+                
+            except Exception as e:
+                #raise(e)
+                logger.error('1.Failed due to: '+ str(e))
+                logger.debug('1.skipping file: '+i)
+                skipped_cnt=skipped_cnt+1
+                driver.refresh()
+                continue
+            
+            # wait to show report results for searched keyword 
+            try:
+                WebDriverWait(driver,500).until(EC.presence_of_element_located((By.XPATH, '/html/body/app-root/div/nd-brand-bar/div/app-adhoc/div/div[2]/div[5]/div[1]/div[1]/app-nlsn-cs-card/div'))) 
+                
+            except:
+                filenotfound_flag=1
+                del all_ip[i]
+                logger.debug(i + " file not found !!")
+                print('filenotfound_flag set to 1')
+                driver.refresh()
+                
+            try:
+                if filenotfound_flag !=1:
+                    #Extract all cards under container
+                    container = driver.find_element_by_id('card-wrapp')
+                    all_cards = container.find_elements_by_class_name("new-card-title")
+                    
+                    #iterate & check names of each card
+                    for card in all_cards:
+                        #if name match then click on the card
+                        if card.text.lower() == i.lower():
+                            print("Selecting Report: %s" % card.text)
+                            doc_name = i
+                            print("*****"+doc_name)
+                            
+                            #To remove the file if already exists
+                            print(f"removing filename {base_path_for_downld}{doc_name}.xlsx")
+                            os.system("rm -f '{}'".format(base_path_for_downld + doc_name + ".xlsx"))
+                            
+                            card.click()
+                            break
+                    
+                    time.sleep(5)
+                    print('test1')
+                    driver.switch_to.window(driver.window_handles[1])
+                    print('test2')
+                    
+                    
+                    
+                    driver.refresh()
+                    time.sleep(7)
+                    frame  = driver.find_element_by_xpath('/html/body/app-root/div/nd-brand-bar/div[2]/app-analysis/div/iframe')
+                    time.sleep(5)
+                    driver.switch_to.frame(frame)
+                    time.sleep(5)
+                    driver.switch_to.frame('dsFrame')
+
+                    #Wait till we find OK button
+                    WebDriverWait(driver,600).until(EC.presence_of_element_located((By.XPATH, '/html/body/app-root/div/div[2]/app-summary/div/app-summary-apply-section/div/nd-button[3]/span')))
+                    ok_button = driver.find_element_by_xpath('/html/body/app-root/div/div[2]/app-summary/div/app-summary-apply-section/div/nd-button[3]/span')
+                    time.sleep(5)
+                    ok_button.click()
+                    logger.debug("Report Selected")
+                    print("Report Selected")
+
+                    print("-------Test 1----------")
+                    #Report Page. This code is navigating to inner frames of webpage
+                    time.sleep(8)
+                    driver.switch_to.default_content()
+
+                    def find_all_iframes(driver):
+                        iframes = driver.find_elements_by_xpath("//iframe")
+                        for index, iframe in enumerate(iframes):
+                            print('index is:{} &id is:{} & iframeSrc is:{} '.format(index,iframe.get_attribute('id'), iframe.get_attribute('src')))
+                            if iframe.get_attribute('id') =='dsFrame':
+                                print('found dsFrame & switching to it !')
+                                driver.switch_to.frame(index)
+                                return 1
+                            # Your sweet business logic applied to iframe goes here.
+                            driver.switch_to.frame(index)
+                            find_all_iframes(driver)
+
+
+                    find_all_iframes(driver)
+                    WebDriverWait(driver,400).until(EC.presence_of_element_located((By.XPATH, '/html/body/div[1]/div[3]/div[1]/div/div[1]/div[1]/div/span')))
+                    print(driver.find_element_by_xpath('/html/body/div[1]/div[3]/div[1]/div/div[1]/div[1]/div/span').text)
+                    
+                    
+                    
+                    
+                    print("Test 6", end ="")
+
+                    # Below 2 clicks are for clicking on File -> Export Chapter TO Excel
+                    driver.find_element_by_xpath('/html/body/div[1]/div[3]/div[1]/div/div[1]/div[1]/div/span').click()
+                    print(driver.find_element_by_xpath('/html/body/div[1]/div[3]/div[1]/div/div[1]/div[1]/div[2]/div/a[6]/div[2]').text)
+                    driver.find_element_by_xpath('/html/body/div[1]/div[3]/div[1]/div/div[1]/div[1]/div[2]/div/a[6]/div[2]').click()
+                    driver.switch_to.window(driver.window_handles[2])
+
+#                     WebDriverWait(driver,500).until(EC.presence_of_element_located((By.XPATH, '/html/body/div[4]/table/tbody/tr/td[2]/div[2]/div[1]/div/a')))
+
+#                     #Testing purpose 
+#                     doc_name_el = driver.find_element_by_xpath("/html/body/div[4]/table/tbody/tr/td[2]/div[2]/div[1]/div/div[1]")
+#                     print(doc_name_el.text)
+#                     doc_name=doc_name_el.text.split(':')[1].strip()
+#                     print('****'+doc_name)
+#                     curr_stat_el = driver.find_element_by_xpath("/html/body/div[4]/table/tbody/tr/td[2]/div[2]/div[1]/div/div[2]")
+#                     print(curr_stat_el.text)
+#                     msg_el = driver.find_element_by_xpath("/html/body/div[4]/table/tbody/tr/td[2]/div[2]/div[1]/div/span")
+#                     print(msg_el.text)
+
+                    print("Report Page")
+                    #Waiting for the file to download
+                    c = 1
+                    file_path = base_path_for_downld + doc_name + ".xlsx"
+                    
+                    
+                    print('searching file in: '+file_path)
+                    print(os.path.isfile(file_path))
+                    while not os.path.isfile(file_path):
+                    #    break
+                        print("File Not there",str(c))
+                        c=c+1
+                        time.sleep(5)
+                    c = 1
+                    file_size = os.path.getsize(file_path)/(1000*1000)
+                    #mb_size = file_size/(1000*1000)
+                    print("File Size is :", round(file_size,2) , "MB")
+                    logger.debug(i + " - Done")
+                    
+                    driver.close()
+                    driver.switch_to.window(driver.window_handles[1])
+                    driver.close()
+                    
+                    # Upload to GCS
+                    filename = base_path_for_downld + doc_name + ".xlsx"
+                    print(filename)
+                    blob = bucket.blob(folder+doc_name+'.xlsx')
+                    blob.upload_from_filename(filename)
+
+                    driver.switch_to.window(driver.window_handles[0])
+                    driver.refresh()
+                    del all_ip[i]
+                    
+            except Exception as e:
+                #raise(e)
+                logger.error('2.Failed due to: '+ str(e))
+                logger.debug('2.skipping file: '+i)
+                skipped_cnt=skipped_cnt+1
+                try:
+                    driver.switch_to.window(driver.window_handles[1])
+                    driver.close()
+                except IndexError:
+                    pass
+                
+                driver.switch_to.window(driver.window_handles[0])
+                driver.refresh()
+            
+    else:
+        logger.debug('else break')
+        break
+            
+    logger.debug('***moving these files to next iteration'+str(all_ip))
+    logger.debug('total missed files in this iteration are:'+str(FileNotFound_ls))
+    FileNotFound_ls=[]
+    all_ip_cp = all_ip.copy()
+    
+    #Keep track of skipped files & iteration count
+    skip_iter=skip_iter+1
+    logger.debug('skipped files in iteration {} are:{}'.format(skip_iter,skipped_cnt))
+    
+    if skip_iter>=10:
+        logger.debug('max counter limit reached ! exiting the loop')
+
+if max_counter >=10:
+    logger.debug('Total Time : {}'.format(datetime.now() - full_start_time))    
+    print("Could not download following files from portal:"+str(all_ip_cp.keys()))
+
+
+logger.debug('Total Time : {}'.format(datetime.now() - full_start_time))
+
+
+all_ip_cp = all_ip.copy()
+all_ip
+
+
+
+
+
+
