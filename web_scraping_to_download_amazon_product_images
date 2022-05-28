@@ -1,0 +1,99 @@
+from selenium import webdriver
+import requests
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image
+import pandas as pd
+from selenium.webdriver import ChromeOptions
+from selenium.common.exceptions import NoSuchElementException
+from requests.exceptions import ConnectionError
+
+PRJ_PATH = r'C:\Users\Madhwan.Sharma\PycharmProjects\Scraping_test'
+
+def save_image(url, asin):
+    asin = str(asin)
+    try:
+        data = requests.get(url)
+    except ConnectionError as err:
+        pass
+    file = open(PRJ_PATH + '\\' + asin + '.jpg', 'wb')
+    file.write(data.content)
+    file.close()
+    return PRJ_PATH + '\\' + asin + '.jpg'
+
+
+def get_asins():
+    df = pd.DataFrame()
+    file_xls = pd.read_excel(PRJ_PATH + '\\New_Data_To_Scrape.xlsx', engine="openpyxl", sheet_name="Low_Confidence_15")
+    df = pd.concat([df,file_xls], axis=0, ignore_index=True)
+    df = df[["Retailer SKU(ASIN)", "Title", "Category", "Brand"]]
+    df.rename(columns={"Retailer SKU(ASIN)": "ASIN",
+                       "Title": "PRODUCT_NAME",
+                       "Brand": "BRAND",
+                       "Category": "PREDICTED_CATEGORY"}, inplace=True)
+    title = df["PRODUCT_NAME"]
+    category = df["PREDICTED_CATEGORY"]
+    df.drop(["PRODUCT_NAME", "PREDICTED_CATEGORY"], axis=1, inplace=True)
+    df["PRODUCT_NAME"] = title
+    df["PREDICTED_CATEGORY"] = category
+    return df
+
+def search_product(asin):
+    img = None
+    driver.find_element_by_xpath('/html/body/div[1]/header/div/div[1]/div[2]/div/form/div[2]/div[1]/input').clear()
+    driver.find_element_by_xpath('/html/body/div[1]/header/div/div[1]/div[2]/div/form/div[2]/div[1]/input').send_keys(asin)
+    try:
+        driver.find_element_by_xpath('/html/body/div[1]/header/div/div[1]/div[2]/div/form/div[3]/div/span/input').click()
+    except NoSuchElementException as np:
+        pass
+
+    try:
+        img = driver.find_element_by_xpath('/html/body/div[1]/div[2]/div[1]/div[1]/div/span[3]/div[2]/div[1]/div/span/div/div/span/a/div/img').get_attribute('src')
+    except:
+        pass
+    return True if img else False
+
+
+def scrape_details(asin):
+    prod_name = driver.find_element_by_xpath('/html/body/div[1]/div[2]/div[1]/div[1]/div/span[3]/div[2]/div[1]/div/span/div/div/span/a/div/img').get_attribute('alt')
+    img = driver.find_element_by_xpath('/html/body/div[1]/div[2]/div[1]/div[1]/div/span[3]/div[2]/div[1]/div/span/div/div/span/a/div/img').get_attribute('src')
+    img_path = save_image(img, asin)
+    return [img_path,prod_name]
+
+
+def write_output(data):
+    worksheet.append(data[1:])
+    img = Image(data[0])
+    img.height = 265
+    img.width = 265
+    worksheet.row_dimensions[worksheet.max_row].height = 265
+    worksheet.column_dimensions['F'].width = 265
+    img.anchor ="F" + str(worksheet.max_row)
+    worksheet.add_image(img)
+
+
+def main():
+    driver.get('https://amazon.co.uk/')
+    list_of_asins = get_asins()
+    for prod_num, ind_product_details in list_of_asins.iterrows():
+        product_found = search_product(ind_product_details['ASIN'])
+        if product_found:
+            product_details = scrape_details(ind_product_details['ASIN'])
+            product_details.extend(
+                [ind_product_details['ASIN'], ind_product_details['BRAND'], ind_product_details['PRODUCT_NAME'],
+                 ind_product_details['PREDICTED_CATEGORY']])
+            write_output(product_details)
+            if prod_num % 1 == 0:
+                workbook.save(PRJ_PATH + '\\op_20.xlsx')
+
+
+if __name__ == '__main__':
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(['Website_Product_Name','ASIN','Brand','Title','Category','Image'])
+    options = ChromeOptions()
+    options.add_argument('--ignore-certificate-errors-spki-list')
+    options.add_argument('--ignore-ssl-errors')
+    driver = webdriver.Chrome(r'<path>', chrome_options= options)
+    #driver = webdriver.Edge(r'<path>')
+    main()
+    #driver.get('https://amazon.co.uk/')
