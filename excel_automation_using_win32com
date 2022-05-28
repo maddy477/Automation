@@ -1,0 +1,62 @@
+import os
+from win32com.client import Dispatch
+
+os.system('TASKKILL /F /IM excel.exe')
+
+excel = Dispatch('Excel.Application')
+excel.Visible = True
+    
+
+input1 = excel.Workbooks.Open(r"<path>")
+input2_fomula_consumption = excel.Workbooks.Open(r"<path>")
+date_mapping = excel.Workbooks.Open(r"<path>")
+
+
+sheet1 = input1.Worksheets('Executive Scorecard for Mick_Ne')
+last_col = sheet1.Range("A1").End(-4161).Column
+last_row = sheet1.Range("A1").End(-4121).Row
+last_Cell = sheet1.Cells(last_row,last_col).Address
+sheet1.Range("A1:" + last_Cell).Copy()
+
+sheet2 = input2_fomula_consumption.Worksheets('Executive Scorecard for Mick_Ne')
+sheet2.Range('A4').PasteSpecial(Paste=-4163)
+
+sheet1.Range("A1:" + last_Cell).Copy()
+
+sheet3 = input2_fomula_consumption.Worksheets('Executive Scorecard for Mic (B)')
+sheet3.Range('A1').PasteSpecial(Paste=-4163)
+
+last_col = sheet3.Range("A1").End(-4161).Column
+last_Cell1 = sheet3.Cells(1,last_col).Address
+sheet3.Range("A1:"+ last_Cell1).Copy()
+sheet4 = input2_fomula_consumption.Worksheets("DateMapping")
+sheet4.Range('A1').PasteSpecial(Paste=-4163)
+
+
+sheet4.Range("P1:T1").Replace("Mth","Mnth")
+sheet4.Range('C4:T4').Copy()
+sheet3.Range('C22').PasteSpecial(Paste=-4163)
+
+
+
+sheet5 = input2_fomula_consumption.Worksheets('TransposeData')
+
+sheet5.Range("A1:Z100").ClearContents()
+
+sheet3.Range("A36:T42").Copy()
+sheet5.Range('A1').PasteSpecial(Paste=-4163,Operation = -4142 , SkipBlanks = False, Transpose = True)
+last_row = sheet5.Range("A1").End(-4121).Row
+sheet5.Range("A1:A"+str(last_row)).Copy()
+sheet5.Range("A"+str(last_row+1)).PasteSpecial(Paste=-4163)
+last_row = sheet5.Range("A1").End(-4121).Row
+sheet5.Range("A"+str(last_row+1)).PasteSpecial(Paste=-4163)
+
+last_row = sheet5.Range("E1").End(-4121).Row
+sheet5.Range("D1:E"+str(last_row)).Cut()
+last_row = sheet5.Range("B1").End(-4121).Row
+sheet5.Range("B"+str(last_row+1)).Paste()
+
+last_row = sheet5.Range("G1").End(-4121).Row
+sheet5.Range("F1:G"+str(last_row)).Cut()
+last_row = sheet5.Range("B1").End(-4121).Row
+sheet5.Range("B"+str(last_row+1)).Paste()
